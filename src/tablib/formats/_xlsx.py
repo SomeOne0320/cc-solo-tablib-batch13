@@ -21,6 +21,8 @@ from openpyxl.workbook import Workbook
 
 import tablib
 
+from ._sheet import import_sheet_rows
+
 INVALID_TITLE_REGEX = re.compile(r'[\\*?:/\[\]]')
 
 
@@ -113,16 +115,14 @@ class XLSXFormat:
 
         dset.title = sheet.title
 
-        for i, row in enumerate(sheet.rows):
-            if i < skip_lines:
-                continue
-            row_vals = [c.value for c in row]
-            if i == skip_lines and headers:
-                dset.headers = row_vals
-            else:
-                if i > skip_lines and len(row_vals) < dset.width:
-                    row_vals += [''] * (dset.width - len(row_vals))
-                dset.append(row_vals)
+        rows = sheet.rows
+        import_sheet_rows(
+            dset,
+            rows,
+            lambda row: [cell.value for cell in row],
+            headers=headers,
+            skip_lines=skip_lines,
+        )
 
     @classmethod
     def import_set(cls, dset, in_stream, headers=True, read_only=True, skip_lines=0):

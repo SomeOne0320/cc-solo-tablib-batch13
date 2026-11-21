@@ -11,6 +11,8 @@ from odf import number, opendocument, style, table, text
 
 import tablib
 
+from ._sheet import import_sheet_rows
+
 bold = style.Style(name="bold", family="paragraph")
 bold.addElement(style.TextProperties(
     fontweight="bold",
@@ -117,18 +119,14 @@ class ODSFormat:
 
         rows = (row for row in sheet.childNodes if row.tagName == "table:table-row")
 
-        for i, row in enumerate(rows):
-            if i < skip_lines:
-                continue
-            row_vals = [cls.read_cell(cell) for cell in row.childNodes if is_real_cell(cell)]
-            if not row_vals:
-                continue
-            if i == skip_lines and headers:
-                dset.headers = row_vals
-            else:
-                if i > skip_lines and len(row_vals) < dset.width:
-                    row_vals += [''] * (dset.width - len(row_vals))
-                dset.append(row_vals)
+        import_sheet_rows(
+            dset,
+            rows,
+            lambda row: [cls.read_cell(cell) for cell in row.childNodes if is_real_cell(cell)],
+            headers=headers,
+            skip_lines=skip_lines,
+            skip_empty_rows=True,
+        )
 
     @classmethod
     def read_cell(cls, cell, value_type=None):

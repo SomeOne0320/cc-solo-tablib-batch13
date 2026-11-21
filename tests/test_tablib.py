@@ -1340,6 +1340,62 @@ class ODSTests(BaseTestCase):
             dataset = tablib.Dataset().load(fh, 'ods')
         self.assertEqual(dataset.pop(), (1, '', True, ''))
 
+    def test_ods_import_set_notes_short_row_and_blank_row(self):
+        ods_source = Path(__file__).parent / 'files' / 'import_layout.ods'
+        with ods_source.open('rb') as fh:
+            dataset = tablib.Dataset().load(fh, 'ods', skip_lines=2)
+        self.assertEqual(dataset.title, 'Report')
+        self.assertEqual(dataset.headers, ['id', 'name', 'description'])
+        self.assertEqual(
+            [list(row) for row in dataset],
+            [
+                ['1', 'Alice', ''],
+                ['2', 'Bob', 'Third entry'],
+                ['3', 'Carol', 'Last entry'],
+            ],
+        )
+
+    def test_ods_import_set_no_headers(self):
+        ods_source = Path(__file__).parent / 'files' / 'import_layout.ods'
+        with ods_source.open('rb') as fh:
+            dataset = tablib.Dataset().load(
+                fh, 'ods', headers=False, skip_lines=2,
+            )
+        self.assertIsNone(dataset.headers)
+        self.assertEqual(
+            [list(row) for row in dataset],
+            [
+                ['id', 'name', 'description'],
+                ['1', 'Alice', ''],
+                ['2', 'Bob', 'Third entry'],
+                ['3', 'Carol', 'Last entry'],
+            ],
+        )
+
+    def test_ods_import_book_sheet_order_and_short_rows(self):
+        ods_source = Path(__file__).parent / 'files' / 'workbook_layout.ods'
+        with ods_source.open('rb') as fh:
+            dbook = tablib.Databook().load(fh, 'ods')
+        self.assertEqual([sheet.title for sheet in dbook.sheets()], ['People', 'Scores'])
+        self.assertEqual(dbook.sheets()[0].headers, ['name', 'age'])
+        self.assertEqual(list(dbook.sheets()[0][1]), ['Bob', ''])
+        self.assertEqual(dbook.sheets()[1].headers, ['id', 'score'])
+        self.assertEqual(list(dbook.sheets()[1][1]), ['2', ''])
+
+    def test_ods_import_set_omitted_cells_and_blank_rows(self):
+        """ODS omits empty cells and drops rows that only contain them."""
+        ods_source = Path(__file__).parent / 'files' / 'empty_cells.ods'
+        with ods_source.open('rb') as fh:
+            dataset = tablib.Dataset().load(fh, 'ods')
+        self.assertEqual(dataset.headers, ['a', 'b', 'c'])
+        self.assertEqual(
+            [list(row) for row in dataset],
+            [
+                ['1', '3', ''],
+                ['4', '5', ''],
+            ],
+        )
+
     def test_ods_unknown_value_type(self):
         # The ods file was trafficked to contain:
         # <table:table-cell office:value-type="unknown" calcext:value-type="string">
@@ -1565,6 +1621,65 @@ class XLSXTests(BaseTestCase):
         with xlsx_source.open('rb') as fh:
             dataset = tablib.Dataset().load(fh, 'xlsx')
         self.assertEqual(dataset.pop(), (1.0, ''))
+
+    def test_xlsx_import_set_notes_short_row_and_blank_row(self):
+        xlsx_source = Path(__file__).parent / 'files' / 'import_layout.xlsx'
+        with xlsx_source.open('rb') as fh:
+            dataset = tablib.Dataset().load(fh, 'xlsx', skip_lines=2)
+        self.assertEqual(dataset.title, 'Report')
+        self.assertEqual(dataset.headers, ['id', 'name', 'description'])
+        self.assertEqual(
+            [list(row) for row in dataset],
+            [
+                [1, 'Alice', None],
+                [2, 'Bob', 'Third entry'],
+                [None, None, None],
+                [3, 'Carol', 'Last entry'],
+            ],
+        )
+
+    def test_xlsx_import_set_no_headers(self):
+        xlsx_source = Path(__file__).parent / 'files' / 'import_layout.xlsx'
+        with xlsx_source.open('rb') as fh:
+            dataset = tablib.Dataset().load(
+                fh, 'xlsx', headers=False, skip_lines=2,
+            )
+        self.assertIsNone(dataset.headers)
+        self.assertEqual(
+            [list(row) for row in dataset],
+            [
+                ['id', 'name', 'description'],
+                [1, 'Alice', None],
+                [2, 'Bob', 'Third entry'],
+                [None, None, None],
+                [3, 'Carol', 'Last entry'],
+            ],
+        )
+
+    def test_xlsx_import_book_sheet_order_and_short_rows(self):
+        xlsx_source = Path(__file__).parent / 'files' / 'workbook_layout.xlsx'
+        with xlsx_source.open('rb') as fh:
+            dbook = tablib.Databook().load(fh, 'xlsx')
+        self.assertEqual([sheet.title for sheet in dbook.sheets()], ['People', 'Scores'])
+        self.assertEqual(dbook.sheets()[0].headers, ['name', 'age'])
+        self.assertEqual(list(dbook.sheets()[0][1]), ['Bob', None])
+        self.assertEqual(dbook.sheets()[1].headers, ['id', 'score'])
+        self.assertEqual(list(dbook.sheets()[1][1]), [2, None])
+
+    def test_xlsx_import_set_empty_cells_and_blank_rows(self):
+        """Excel keeps empty cells as None and keeps blank rows."""
+        xlsx_source = Path(__file__).parent / 'files' / 'empty_cells.xlsx'
+        with xlsx_source.open('rb') as fh:
+            dataset = tablib.Dataset().load(fh, 'xlsx')
+        self.assertEqual(dataset.headers, ['a', 'b', 'c'])
+        self.assertEqual(
+            [list(row) for row in dataset],
+            [
+                ['1', None, '3'],
+                [None, None, None],
+                ['4', '5', None],
+            ],
+        )
 
     def test_xlsx_wrong_char(self):
         """Bad characters are not silently ignored. We let the exception bubble up."""
