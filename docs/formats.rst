@@ -47,6 +47,42 @@ lines that should be skipped before starting to read data.
 
     The ``skip_lines`` parameter was added.
 
+Importing in batches
+++++++++++++++++++++
+
+When a data source is larger than memory, a validation job can process it in
+batches instead of loading every record into a single table. Pass
+``batch_size`` (a positive number of rows) to get an iterator over
+:class:`Dataset` instances rather than one complete dataset::
+
+    import tablib
+
+    with open('large.csv', newline='') as fh:
+        for batch in tablib.import_set(fh, format='csv', batch_size=1000):
+            validate(batch)  # batch is an ordinary Dataset of <= 1000 rows
+
+Batching is available for the ``csv`` and ``tsv`` formats and requires an
+explicit ``format``. Reading is lazy, so creating the iterator consumes
+nothing and producing the first batch only reads the records it contains; the
+remainder of the stream is read only as later batches are requested. The last
+batch may contain fewer than ``batch_size`` rows, and no empty batch is ever
+yielded.
+
+The ``skip_lines`` and ``headers`` parameters behave as they do for a normal
+import: skipped lines are skipped once, the header is read once, and every
+batch is given its own copy of it. Badly shaped records are handled as usual:
+blank lines are ignored, short rows are padded to the width of the header
+(or of the first record when ``headers=False``), and over-wide rows raise
+:class:`InvalidDimensions`. Tablib does not close the stream, so a file opened
+by the caller stays the caller's responsibility.
+
+Without ``batch_size`` the same call keeps returning a single, complete
+:class:`Dataset`.
+
+.. versionadded:: 3.11.0
+
+    The ``batch_size`` option for batched ``csv``/``tsv`` imports was added.
+
 When exporting with the ``csv`` format, the top row will contain headers, if
 they have been set. Otherwise, the top row will contain the first row of the
 dataset.
@@ -200,6 +236,9 @@ tsv
 ===
 
 A variant of the csv_ format with tabulators as fields separators.
+
+Like ``csv``, this format supports importing in batches by passing
+``batch_size`` to :func:`tablib.import_set` or :meth:`Dataset.load`.
 
 xls
 ===

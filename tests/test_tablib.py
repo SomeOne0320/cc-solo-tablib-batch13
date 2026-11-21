@@ -19,7 +19,7 @@ from openpyxl.reader.excel import load_workbook
 
 import tablib
 from tablib.core import Row, detect_format
-from tablib.exceptions import UnsupportedFormat
+from tablib.exceptions import InvalidDimensions, UnsupportedFormat
 from tablib.formats import registry
 
 try:
@@ -1186,6 +1186,250 @@ class CSVTests(BaseTestCase):
 
         d2 = tablib.import_set(_csv, format="csv", **kwargs)
         self.assertEqual(3, len(d2.headers))
+
+
+class CSVBatchImportTests(BaseTestCase):
+    """Tests for the incremental (batched) CSV/TSV import entry points."""
+
+    def batches(self, source, **kwargs):
+        return list(tablib.import_set(source, batch_size=kwargs.pop('batch_size'), **kwargs))
+
+    def test_batch_import_returns_datasets(self):
+        csv_text = 'id,name\n1,Adams\n2,Washington\n3,Jefferson\n4,Madison\n5,Monroe\n'
+        batches = list(
+            tablib.import_set(csv_text, format='csv', batch_size=2)
+        )
+        self.assertEqual([2, 2, 1], [batch.height for batch in batches])
+        self.assertTrue(all(isinstance(batch, tablib.Dataset) for batch in batches))
+        self.assertEqual(['id', 'name'], batches[0].headers)
+        self.assertEqual(
+            [{'id': '1', 'name': 'Adams'}, {'id': '2', 'name': 'Washington'}],
+            batches[0].dict,
+        )
+        self.assertEqual([{'id': '5', 'name': 'Monroe'}], batches[-1].dict)
+
+    def test_batch_import_last_batch_can_be_short(self):
+        batches = self.batches('a\n1\n2\n3\n', format='csv', batch_size=5)
+        self.assertEqual(1, len(batches))
+        self.assertEqual(3, batches[0].height)
+
+    def test_batch_import_skips_empty_rows(self):
+        csv_text = 'id,name\n\n1,A\n\n\n2,B\n\n3,C\n\n'
+        batches = self.batches(csv_text, format='csv', batch_size=2)
+        self.assertEqual([2, 1], [batch.height for batch in batches])
+        self.assertEqual('C', batches[-1][0][1])
+
+    def test_batch_import_declines_empty_batches(self):
+        for csv_text in ('', 'id,name\n', '\n\n\n'):
+            with self.subTest(csv_text=csv_text):
+                self.assertEqual([], self.batches(csv_text, format='csv', batch_size=2))
+        self.assertEqual([], self.batches('id,name\n\n\n', format='csv', batch_size=2))
+
+    def test_batch_import_headers_false(self):
+        batches = self.batches('1,A\n2,B\n3,C\n', format='csv', headers=False, batch_size=2)
+        self.assertIsNone(batches[0].headers)
+        self.assertEqual([('1', 'A'), ('2', 'B')], list(batches[0]))
+        self.assertEqual([('3', 'C')], list(batches[1]))
+
+    def test_batch_import_pads_short_rows(self):
+        csv_text = 'H1,H2,H3\nA,B\nC,D,E\nF\n'
+        batches = self.batches(csv_text, format='csv', batch_size=2)
+        self.assertEqual(
+            [('A', 'B', ''), ('C', 'D', 'E'), ('F', '', '')],
+            [row for batch in batches for row in batch],
+        )
+
+    def test_batch_import_rejects_wider_rows(self):
+        csv_text = 'H1,H2\nA,B\nC,D,E\n'
+        batches = tablib.import_set(csv_text, format='csv', batch_size=1)
+        self.assertEqual(('A', 'B'), next(batches)[0])
+        with self.assertRaises(InvalidDimensions):
+            next(batches)
+
+    def test_batch_import_quoted_newlines_are_one_record(self):
+        csv_text = 'id,body\n1,"line one\nline two"\n2,"three\nfour"\n'
+        batches = self.batches(csv_text, format='csv', batch_size=1)
+        self.assertEqual([1, 1], [batch.height for batch in batches])
+        self.assertEqual([('1', 'line one\nline two')], list(batches[0]))
+
+    def test_batch_import_skip_lines_applies_once(self):
+        csv_text = 'garbage,line\n\nid,name\n1,A\n2,B\n3,C\n'
+        batches = self.batches(csv_text, format='csv', skip_lines=2, batch_size=2)
+        self.assertEqual([2, 1], [batch.height for batch in batches])
+        self.assertTrue(all(batch.headers == ['id', 'name'] for batch in batches))
+        self.assertEqual('1', batches[0][0][0])
+
+    def test_batch_import_header_is_copied_per_batch(self):
+        batches = self.batches(
+            'id,name\n1,A\n2,B\n3,C\n4,D\n', format='csv', batch_size=2
+        )
+        batches[0].headers[0] = 'changed'
+        batches[0].headers.append('extra')
+        self.assertEqual(['id', 'name'], batches[1].headers)
+        self.assertEqual([{'id': '3', 'name': 'C'}, {'id': '4', 'name': 'D'}], batches[1].dict)
+
+    def test_batch_import_preserves_csv_options(self):
+        csv_text = "id;name\n1;'A;B'\n2;'C;D'\n"
+        batches = self.batches(
+            csv_text, format='csv', batch_size=1, delimiter=';', quotechar="'"
+        )
+        self.assertEqual([{'id': '1', 'name': 'A;B'}], batches[0].dict)
+
+    def test_batch_import_tsv(self):
+        batches = self.batches('id\tname\n1\tA\n2\tB\n3\tC\n', format='tsv', batch_size=2)
+        self.assertEqual([2, 1], [batch.height for batch in batches])
+        self.assertEqual(['id', 'name'], batches[0].headers)
+        self.assertEqual([{'id': '3', 'name': 'C'}], batches[-1].dict)
+
+    def test_batch_import_dataset_load(self):
+        batches = list(
+            tablib.Dataset().load('id,name\n1,A\n2,B\n', format='csv', batch_size=1)
+        )
+        self.assertEqual(2, len(batches))
+        self.assertEqual([{'id': '1', 'name': 'A'}], batches[0].dict)
+
+    def test_batch_import_from_real_file_stream(self):
+        csv_text = (
+            'id,name\n'
+            '1,A\n'
+            '2,"multi\nline"\n'
+            '\n'
+            '3,C\n'
+            '4,D\n'
+            '5,E\n'
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.csv', newline='', delete=False) as fh:
+            fh.write(csv_text)
+            path = fh.name
+        self.addCleanup(Path(path).unlink)
+
+        class CountingFile:
+            """Line-counting iterator around a real file object."""
+
+            def __init__(self, fh):
+                self.fh = fh
+                self.lines_read = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                line = next(self.fh)
+                self.lines_read += 1
+                return line
+
+            def __getattr__(self, name):
+                return getattr(self.fh, name)
+
+        with open(path, newline='') as fh:
+            stream = CountingFile(fh)
+            batches = tablib.import_set(stream, format='csv', batch_size=2)
+            first = next(batches)
+            # Only the header and the two rows of the first batch were read,
+            # even though the quoted newline spans two physical lines.
+            self.assertEqual(4, stream.lines_read)
+            self.assertEqual(
+                [('1', 'A'), ('2', 'multi\nline')], list(first)
+            )
+            rest = list(batches)
+            self.assertEqual([2, 1], [batch.height for batch in rest])
+            self.assertEqual('E', rest[-1][0][1])
+            # Tablib must leave a caller-opened stream open.
+            self.assertFalse(fh.closed)
+            self.assertEqual(['id', 'name'], first.headers)
+
+    def test_batch_import_does_not_close_caller_stream(self):
+        stream = StringIO('id,name\n1,A\n2,B\n3,C\n')
+        batches = tablib.import_set(stream, format='csv', batch_size=2)
+        self.assertEqual(2, next(batches).height)
+        self.assertEqual(1, next(batches).height)
+        self.assertFalse(stream.closed)
+        self.addCleanup(stream.close)
+
+    def test_batch_import_only_reads_needed_records(self):
+        """The first batch must not read the rest of the underlying file."""
+
+        class CountingStream:
+            def __init__(self, stream):
+                self.stream = stream
+                self.lines_read = 0
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                line = next(self.stream)
+                self.lines_read += 1
+                return line
+
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+
+        stream = CountingStream(StringIO('id,name\n1,A\n2,B\n3,C\n4,D\n5,E\n'))
+        batches = tablib.import_set(stream, format='csv', batch_size=2)
+        self.assertEqual(0, stream.lines_read)
+        next(batches)
+        # Header + two data rows only.
+        self.assertEqual(3, stream.lines_read)
+        next(batches)
+        self.assertEqual(5, stream.lines_read)
+
+    def test_batch_import_consumes_rows_incrementally(self):
+        batches = tablib.import_set(
+            'id,name\n1,A\n2,B\n3,C\n4,D\n5,E\n', format='csv', batch_size=2
+        )
+        seen = []
+        for batch in batches:
+            seen.extend(batch['id'])
+        self.assertEqual(['1', '2', '3', '4', '5'], seen)
+
+    def test_batch_size_must_be_positive_integer(self):
+        for value in (0, -1):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                tablib.import_set('a,b\n1,2\n', format='csv', batch_size=value)
+        for value in ('2', 2.5, True):
+            with self.subTest(value=value), self.assertRaises(TypeError):
+                tablib.import_set('a,b\n1,2\n', format='csv', batch_size=value)
+
+    def test_batch_size_none_means_no_batching(self):
+        data = tablib.import_set('a,b\n1,2\n', format='csv', batch_size=None)
+        self.assertIsInstance(data, tablib.Dataset)
+        self.assertEqual(1, data.height)
+
+    def test_batch_import_requires_explicit_batchable_format(self):
+        with self.assertRaises(UnsupportedFormat):
+            tablib.import_set('a,b\n1,2\n', batch_size=2)
+        with self.assertRaises(UnsupportedFormat):
+            tablib.import_set('[]', format='json', batch_size=2)
+
+    def test_batch_import_requested_through_aliases(self):
+        for keyword in ('batchsize', 'rows_per_batch', 'chunk_size', 'chunksize'):
+            with self.subTest(keyword=keyword):
+                batches = list(
+                    tablib.import_set(
+                        'id,name\n1,A\n2,B\n3,C\n', format='csv', **{keyword: 2}
+                    )
+                )
+                self.assertEqual([2, 1], [batch.height for batch in batches])
+
+    def test_batch_import_from_format_class(self):
+        fmt = registry.get_format('csv')
+        batches = list(fmt.import_batches('id,name\n1,A\n2,B\n3,C\n', batch_size=2))
+        self.assertEqual([2, 1], [batch.height for batch in batches])
+        self.assertEqual(['id', 'name'], batches[0].headers)
+
+    def test_batch_import_leaves_target_dataset_untouched(self):
+        data = tablib.Dataset(('x', 'y'), headers=('a', 'b'))
+        list(data.load('p,q\n1,2\n', format='csv', batch_size=1))
+        self.assertEqual(['a', 'b'], data.headers)
+        self.assertEqual([('x', 'y')], list(data))
+
+    def test_non_batched_import_still_returns_dataset(self):
+        for text, fmt in (('id,name\n1,A\n', 'csv'), ('id\tname\n1\tA\n', 'tsv')):
+            with self.subTest(format=fmt):
+                data = tablib.import_set(text, format=fmt)
+                self.assertIsInstance(data, tablib.Dataset)
+                self.assertEqual(1, data.height)
 
 
 class TSVTests(BaseTestCase):

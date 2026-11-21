@@ -26,7 +26,7 @@ from .exceptions import (
     UnsupportedFormat,
 )
 from .formats import registry
-from .utils import normalize_input
+from .utils import normalize_input, pop_batch_size
 
 __title__ = 'tablib'
 __author__ = 'Kenneth Reitz'
@@ -415,10 +415,31 @@ class Dataset:
         Import `in_stream` to the :class:`Dataset` object using the `format`.
         `in_stream` can be a file-like object, a string, or a bytestring.
 
+        For formats supporting batched imports (``csv`` and ``tsv``), passing a
+        ``batch_size`` keyword returns an iterator over :class:`Dataset`
+        objects of at most that many rows each, instead of populating this
+        dataset.  Batches are read lazily from *in_stream*.
+
         :param \\*\\*kwargs: (optional) custom configuration to the format `import_set`.
         """
 
         stream = normalize_input(in_stream)
+        batch_size = pop_batch_size(kwargs)
+        if batch_size is not None:
+            # Batched imports only apply when the caller explicitly names a
+            # format.  Auto-detection would sample and rewind the stream, which
+            # would break the guarantee that producing the first batch does not
+            # read ahead of it.
+            if not format:
+                raise UnsupportedFormat(
+                    'A format must be specified when importing in batches.'
+                )
+            fmt = registry.get_format(format)
+            if not hasattr(fmt, 'import_batches'):
+                raise UnsupportedFormat(
+                    f'Format {format!r} cannot be imported in batches.'
+                )
+            return fmt.import_batches(stream, batch_size=batch_size, **kwargs)
         if not format:
             format = detect_format(stream)
 
@@ -952,7 +973,11 @@ def detect_format(stream):
 
 
 def import_set(stream, format=None, **kwargs):
-    """Return dataset of given stream (file-like object, string, or bytestring)."""
+    """Return dataset of given stream (file-like object, string, or bytestring).
+
+    For the ``csv`` and ``tsv`` formats, passing ``batch_size`` returns an
+    iterator over :class:`Dataset` batches instead of a single dataset.
+    """
 
     return Dataset().load(stream, format, **kwargs)
 
