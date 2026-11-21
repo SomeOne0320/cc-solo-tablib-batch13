@@ -22,7 +22,9 @@ class CSVFormat:
 
         _csv = csv.writer(stream, **kwargs)
 
-        for row in dataset._package(dicts=False):
+        # Package and format rows one at a time so the whole formatted
+        # table is never held in memory alongside the generated text.
+        for row in dataset._package_rows():
             _csv.writerow(row)
 
         stream.seek(0)

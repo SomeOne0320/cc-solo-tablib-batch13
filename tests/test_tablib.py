@@ -1187,6 +1187,97 @@ class CSVTests(BaseTestCase):
         d2 = tablib.import_set(_csv, format="csv", **kwargs)
         self.assertEqual(3, len(d2.headers))
 
+    def test_csv_export_empty_dataset(self):
+        """Empty datasets (with and without headers) export the same via
+        the string and the readable-stream path."""
+        for ds, expected in (
+            (tablib.Dataset(), ''),
+            (tablib.Dataset(headers=('a', 'b')), 'a,b\r\n'),
+        ):
+            self.assertEqual(expected, ds.export('csv'))
+            stream = registry.get_format('csv').export_stream_set(ds)
+            self.assertEqual(expected, stream.getvalue())
+            self.assertEqual(expected, stream.read())
+
+    def test_csv_stream_export_matches_string(self):
+        """export_stream_set must produce exactly the same output as export_set."""
+        ds = tablib.Dataset(headers=self.headers)
+        ds.append(self.john)
+        ds.append(('A,B', 'line\nbreak', 'quote"q'))
+        kwargs = {'delimiter': ';', 'lineterminator': '\n'}
+        stream = registry.get_format('csv').export_stream_set(ds, **kwargs)
+        self.assertEqual(ds.export('csv', **kwargs), stream.getvalue())
+
+    def test_csv_export_preserves_options_and_unicode(self):
+        """Caller-supplied writer options and non-ASCII content are kept."""
+        ds = tablib.Dataset(headers=('城市', 'note'))
+        ds.append(('北京', 'a|b'))
+        out = ds.export(
+            'csv', delimiter='|', quotechar="'", lineterminator='\n',
+        )
+        self.assertEqual(out, "城市|note\n北京|'a|b'\n")
+
+    def test_csv_formatters_order_count_and_no_mutation(self):
+        """Streaming export applies formatters in registration order, once
+        per cell, without mutating the source dataset."""
+        calls = []
+
+        def all_fmt(value):
+            calls.append(('all', value))
+            return f'~{value}~'
+
+        def col_fmt(value):
+            calls.append(('col', value))
+            return f'[{value}]'
+
+        ds = tablib.Dataset(headers=('a', 'b', 'c'))
+        ds.append(('r0a', 'r0b', 'r0c'))
+        ds.append(('r1a', 'r1b', 'r1c'))
+        ds.add_formatter(None, all_fmt)
+        ds.add_formatter(1, col_fmt)
+        ds.add_formatter(1, lambda value: value + '!')
+
+        original_rows = [list(row) for row in ds._data]
+        expected = (
+            'a,b,c\n'
+            '~r0a~,[~r0b~]!,~r0c~\n'
+            '~r1a~,[~r1b~]!,~r1c~\n'
+        )
+        expected_calls = [
+            ('all', 'r0a'), ('all', 'r0b'), ('all', 'r0c'),
+            ('col', '~r0b~'),
+            ('all', 'r1a'), ('all', 'r1b'), ('all', 'r1c'),
+            ('col', '~r1b~'),
+        ]
+        self.assertEqual(expected, ds.export('csv', lineterminator='\n'))
+        self.assertEqual(expected_calls, calls)
+        self.assertEqual(
+            expected,
+            registry.get_format('csv')
+            .export_stream_set(ds, lineterminator='\n')
+            .getvalue(),
+        )
+        # Each export triggers the same calls in the same order.
+        self.assertEqual(expected_calls * 2, calls)
+        # Source data must remain untouched after two full exports.
+        self.assertEqual(original_rows, [list(row) for row in ds._data])
+
+    def test_package_rows_matches_package(self):
+        """The lazy row generator yields exactly _package(dicts=False),
+        including header placement, while not retaining all rows at once."""
+        ds = tablib.Dataset(headers=self.headers)
+        ds.append(self.john)
+        ds.append(self.george)
+        ds.add_formatter(None, lambda value: str(value).upper())
+
+        self.assertEqual(ds._package(dicts=False), list(ds._package_rows()))
+        # A generator is used, so rows are produced on demand.
+        self.assertEqual(list(ds._package_rows())[0], list(self.headers))
+        # No-headers dataset yields no header row.
+        plain = tablib.Dataset()
+        plain.append((1, 2))
+        self.assertEqual(plain._package(dicts=False), list(plain._package_rows()))
+
 
 class TSVTests(BaseTestCase):
     def test_tsv_import_set(self):
@@ -1233,6 +1324,30 @@ class TSVTests(BaseTestCase):
             tsv = tsv.strip('\t') + '\r\n'
 
         self.assertEqual(tsv, self.founders.tsv)
+
+    def test_tsv_empty_dataset(self):
+        """Empty TSV datasets behave on both export entry points."""
+        for ds, expected in (
+            (tablib.Dataset(), ''),
+            (tablib.Dataset(headers=('a', 'b')), 'a\tb\r\n'),
+        ):
+            self.assertEqual(expected, ds.export('tsv'))
+            stream = registry.get_format('tsv').export_stream_set(ds)
+            self.assertEqual(expected, stream.getvalue())
+
+    def test_tsv_stream_export_matches_string_with_options(self):
+        """TSV stream and string outputs match, honoring writer options
+        and quoting of embedded tabs/newlines."""
+        ds = tablib.Dataset(headers=self.headers)
+        ds.append(('a\tb', 'line\nbreak', 'plain'))
+        ds.add_formatter(2, lambda value: f'[{value}]')
+
+        kwargs = {'lineterminator': '\n'}
+        expected = 'first_name\tlast_name\tgpa\n"a\tb"\t"line\nbreak"\t[plain]\n'
+        self.assertEqual(expected, ds.export('tsv', **kwargs))
+        stream = registry.get_format('tsv').export_stream_set(ds, **kwargs)
+        self.assertEqual(expected, stream.getvalue())
+        self.assertEqual(('a\tb', 'line\nbreak', 'plain'), tuple(ds._data[0]))
 
 
 class ODSTests(BaseTestCase):

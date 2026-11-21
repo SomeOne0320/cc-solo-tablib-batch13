@@ -278,31 +278,47 @@ class Dataset:
                 raise InvalidDimensions
             return False
 
+    def _format_row(self, row):
+        """Apply the registered formatters to a single row.
+
+        The original row (and therefore the :class:`Dataset` itself) is
+        never mutated.
+        """
+        if self._formatters:
+            row = row.copy()  # To not mutate internal data structure
+            for col, callback in self._formatters:
+                if col is None:
+                    # Apply formatter to all cells
+                    row = [callback(cell) for cell in row]
+                else:
+                    row[col] = callback(row[col])
+        return list(row)
+
+    def _package_rows(self):
+        """Yield packaged rows one at a time, applying formatters lazily.
+
+        The headers row (if any) is yielded first, mirroring
+        ``_package(dicts=False)`` without materializing the whole table.
+        """
+        # Snapshot the rows so a formatter cannot alter the rows being
+        # iterated and the original data stays untouched.
+        _data = list(self._data)
+        if self.headers:
+            yield list(self.headers)
+        for row in _data:
+            yield self._format_row(row)
+
     def _package(self, dicts=True):
         """Packages Dataset into lists of dictionaries for transmission."""
         # TODO: Dicts default to false?
-
-        _data = list(self._data)
-
-        def format_row(row):
-            # Execute formatters
-            if self._formatters:
-                row = row.copy()  # To not mutate internal data structure
-                for col, callback in self._formatters:
-                    if col is None:
-                        # Apply formatter to all cells
-                        row = [callback(cell) for cell in row]
-                    else:
-                        row[col] = callback(row[col])
-            return list(row)
-
-        if self.headers:
-            if dicts:
-                data = [dict(list(zip(self.headers, format_row(row)))) for row in _data]
-            else:
-                data = [list(self.headers)] + [format_row(row) for row in _data]
+        if self.headers and dicts:
+            _data = list(self._data)
+            data = [
+                dict(list(zip(self.headers, self._format_row(row))))
+                for row in _data
+            ]
         else:
-            data = [format_row(row) for row in _data]
+            data = list(self._package_rows())
         return data
 
     def _get_headers(self):
